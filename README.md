@@ -4,7 +4,7 @@ This project provides a complete setup for the characterization of Shape Memory 
 
 ## Applications
 
-1. **guiMain**
+1. **mainGUI**
 
    * A graphical user interface application developed in PyQt5 for real-time data acquisition.
    * Connects to an Arduino and two USB cameras for synchronized data capture.
