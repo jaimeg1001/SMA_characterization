@@ -24,6 +24,11 @@ This project provides a complete setup for the characterization of Shape Memory 
 
    * Plots graphs for temperature-force and temperature-deflection based on the acquired data.
 
+5. **VernierSensor**
+
+   * Custom Arduino Library for Vernier sensors
+   * This folder must be placed in the libraries folder of Arduino
+  
 ## Hardware Components
 
 * Arduino board
