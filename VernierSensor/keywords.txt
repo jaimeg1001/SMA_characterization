@@ -1,0 +1,3 @@
+VernierLib	KEYWORD1 
+autoID	KEYWORD2 
+readSensor	KEYWORD2 
