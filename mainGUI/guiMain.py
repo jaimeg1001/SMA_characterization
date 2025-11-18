@@ -12,11 +12,11 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                            QLabel, QPushButton, QComboBox, QTabWidget, QTextEdit,
                            QSpinBox, QFileDialog, QMessageBox, QGridLayout, QSplitter,
                            QFrame, QGroupBox, QDoubleSpinBox, QInputDialog, QDialog, QVBoxLayout,
-                           QDialogButtonBox,QLineEdit)
+                           QDialogButtonBox,QLineEdit,QSlider)
 from PyQt5.QtGui import QPixmap, QImage, QFont, QIcon
 from PyQt5.QtCore import Qt, QTimer, pyqtSlot, QSize, QThread, pyqtSignal
 import numpy as np
-
+kernel = np.ones((5,5),np.uint8)
 class VideoCapture(QThread):
     change_pixmap_signal = pyqtSignal(np.ndarray, int)
     
@@ -27,11 +27,13 @@ class VideoCapture(QThread):
         
     def run(self):
               
-        if self.camera_id == 0:
-            cap = self.init_videocapture(1024,576)
+        if self.camera_id == 1:
+            cap = self.init_videocapture(self.camera_id,1024,576)
             cap.set(cv2.CAP_PROP_SETTINGS,1)
         else:
-            cap = cv2.VideoCapture(self.camera_id,cv2.CAP_DSHOW)
+            cap = self.init_videocapture(self.camera_id,1024,576)
+            #cap = cv2.VideoCapture(self.camera_id,cv2.CAP_DSHOW)
+            cap.set(cv2.CAP_PROP_SETTINGS,1)
         #if self.camera_id == 0:
         #    cap.set(cv2.CAP_PROP_SETTINGS,1)
         
@@ -47,8 +49,8 @@ class VideoCapture(QThread):
             
         cap.release()
     
-    def init_videocapture(self,width, height):
-        camera = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    def init_videocapture(self,index,width, height):
+        camera = cv2.VideoCapture(index, cv2.CAP_DSHOW)
         camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc('M', 'J', 'P', 'G'))
         camera.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         camera.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
@@ -149,6 +151,14 @@ class SMACharacterizationApp(QMainWindow):
 
         # Test para guardar imagenes
         self.lastFrames = [None,None]
+        # Filtro de color
+        self.color_filter_tab_active = False
+        self.color_filter_mode = "RGB"  # o "HSV"
+        self.rgb_lower = [0, 0, 0]
+        self.rgb_upper = [255, 255, 255]
+        self.hsv_lower = [0, 0, 0]
+        self.hsv_upper = [179, 255, 255]
+
         
         # Inicializar serial thread
         self.serial_thread = SerialThread()
@@ -294,13 +304,13 @@ class SMACharacterizationApp(QMainWindow):
         
         experiment_layout.addWidget(QLabel("Tiempo activo (ms):"), 0, 0)
         self.active_time_spin = QSpinBox()
-        self.active_time_spin.setRange(1, 60000)
+        self.active_time_spin.setRange(1, 10000000)
         self.active_time_spin.setValue(1000)
         experiment_layout.addWidget(self.active_time_spin, 0, 1)
         
         experiment_layout.addWidget(QLabel("Tiempo en reposo (ms):"), 1, 0)
         self.rest_time_spin = QSpinBox()
-        self.rest_time_spin.setRange(1, 60000)
+        self.rest_time_spin.setRange(1, 100000000)
         self.rest_time_spin.setValue(1000)
         experiment_layout.addWidget(self.rest_time_spin, 1, 1)
         
@@ -383,10 +393,50 @@ class SMACharacterizationApp(QMainWindow):
         calibration_layout.setRowStretch(5, 1)
         
         self.tabs.addTab(calibration_tab, "Calibración")
+#-----------------------------------------------------------------------------------------------------
+        # Tab 3: Filtro de color
+        filter_tab = QWidget()
+        filter_layout = QVBoxLayout(filter_tab)
 
+        # Selector de modo
+        self.mode_selector = QComboBox()
+        self.mode_selector.addItems(["RGB", "HSV"])
+        self.mode_selector.currentTextChanged.connect(self.change_filter_mode)
+        filter_layout.addWidget(QLabel("Modo de filtrado:"))
+        filter_layout.addWidget(self.mode_selector)
+
+        # Sliders para rangos
+        self.sliders = []
+        self.slider_labels = []
+        labels = ["Min", "Max"]
+        channels_rgb = ["R", "G", "B"]
+        channels_hsv = ["H", "S", "V"]
+
+        def add_slider(name, label_type, i):
+            label = QLabel(f"{name} {label_type}")
+            slider = QSlider(Qt.Horizontal)
+            slider.setMinimum(0)
+            slider.setMaximum(255)
+            slider.setValue(0 if label_type == "Min" else slider.maximum())
+            slider.valueChanged.connect(self.update_color_ranges)
+
+            filter_layout.addWidget(label)
+            filter_layout.addWidget(slider)
+
+            self.slider_labels.append(label)
+            self.sliders.append(slider)
+
+        # Inicialmente asumir modo RGB
+        for ch in ["R", "G", "B"]:
+            add_slider(ch, "Min", 0)
+        for ch in ["R", "G", "B"]:
+            add_slider(ch, "Max", 1)
+
+        filter_tab.setLayout(filter_layout)
+        self.tabs.addTab(filter_tab, "Filtro de Color")
+#-----------------------------------------------------------------------------------------------------
 
         bottom_splitter.addWidget(self.tabs)
-
         main_layout.addWidget(bottom_splitter, 1)
 
         # Establecer estilo global
@@ -430,60 +480,121 @@ class SMACharacterizationApp(QMainWindow):
 
     def init_cameras(self):
         # Iniciar captura de las cámaras
-        for i in range(2):
+        for i in [1,2]:
             thread = VideoCapture(i)
             thread.change_pixmap_signal.connect(self.update_camera)
             thread.start()
             self.camera_threads.append(thread)
             
     def update_camera(self, image, camera_id):
-        # Aruco functionalities (test)
-        if camera_id == 0:
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            # Detect the markers in the image
-            corners, ids, rejected = self.aruco_detector.detectMarkers(gray)
-            if self.aruco_detection:
-                aruco.drawDetectedMarkers(image, corners, ids)
-            #--------------Calculo de la distancia---------------------------
-            # Constants
-            arucoWidth_mm = 20
-            arucoHeight_mm = 20 
+        # Verifica si estamos en la pestaña "Filtro de Color"
+        self.color_filter_tab_active = (self.tabs.currentIndex() == 2)
 
-            if ids is not None:
-                if np.array_equal(ids.flatten(),np.array([0,1])):
+        if self.color_filter_tab_active:
+            if camera_id == 1:
+                # Aplicar filtro de color
+                filtered = self.apply_color_filter(image)
+                opening = cv2.morphologyEx(filtered, cv2.MORPH_OPEN, kernel)
+                closing = cv2.morphologyEx(opening, cv2.MORPH_CLOSE, kernel)
+                
+                # Buscar contornos y dibujar centroide en la imagen original
+                contours, _ = cv2.findContours(closing, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                centroid_img = image.copy()
+                if contours:
+                    largest = max(contours, key=cv2.contourArea)
+                    M = cv2.moments(largest)
+                    if M["m00"] != 0:
+                        cx = int(M["m10"] / M["m00"])
+                        cy = int(M["m01"] / M["m00"])
+                        cv2.circle(centroid_img, (cx, cy), 5, (0, 255, 0), -1)
+                rgb_image = cv2.cvtColor(centroid_img, cv2.COLOR_BGR2RGB)
+                
+                # Mostrar máscara binaria como imagen en escala de grises
+                filtered_image = cv2.cvtColor(closing, cv2.COLOR_GRAY2RGB)
+            else:
+                rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        else:
+            # --- Procesamiento normal con detección ArUco ---
+            if camera_id == 1:
+                arucoWidth_mm = 20
+                arucoHeight_mm = 20
+                markerRadius = 30 / 2
+
+                # Aplicar filtro de color
+                filtered = self.apply_color_filter(image)
+                opening = cv2.morphologyEx(filtered, cv2.MORPH_OPEN, kernel)
+                closing = cv2.morphologyEx(opening, cv2.MORPH_CLOSE, kernel)
+                
+                # Buscar contornos y dibujar centroide en la imagen original
+                contours, _ = cv2.findContours(closing, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                if contours:
+                    largest = max(contours, key=cv2.contourArea)
+                    M = cv2.moments(largest)
+                    area = cv2.contourArea(largest)
+                    if M["m00"] != 0:
+                        cx = int(M["m10"] / M["m00"])
+                        cy = int(M["m01"] / M["m00"])
+                        self.cx = cx
+                        self.cy = cy
+                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                corners, ids, rejected = self.aruco_detector.detectMarkers(gray)
+                if self.aruco_detection:
+                    aruco.drawDetectedMarkers(image, corners, ids)
+                    try:
+                        cv2.circle(image, (cx, cy), 5, (0, 255, 0), -1)
+                    except:
+                        cv2.circle(image, (self.cx, self.cy), 5, (0, 255, 0), -1)
+
+                if ids is not None and (0 in ids.flatten()):
                     x_scale = []
                     y_scale = []
                     centers = {}
-                    for id in ids.flatten():
-                        x_scale.append( (corners[id][0][1][1] - corners[id][0][0][1]) / arucoWidth_mm )
-                        x_scale.append( (corners[id][0][2][1] - corners[id][0][3][1]) / arucoWidth_mm )
-                        y_scale.append( (corners[id][0][3][0] - corners[id][0][0][0]) / arucoHeight_mm )
-                        y_scale.append( (corners[id][0][2][0] - corners[id][0][1][0]) / arucoHeight_mm )
-    
-                    for i, corner_set in enumerate(corners):
-                        pts = corner_set[0]  # shape (4, 2)
 
-                        # Center: average of the 4 corners
+                    for id in ids.flatten():
+                        if id == 0:
+                            if (corners[id][0][3][0] - corners[id][0][0][0]) > 0 and (corners[id][0][2][0] - corners[id][0][1][0]) > 0:
+                                x_scale.append((corners[id][0][1][1] - corners[id][0][0][1]) / arucoWidth_mm)
+                                x_scale.append((corners[id][0][2][1] - corners[id][0][3][1]) / arucoWidth_mm)
+                                y_scale.append((corners[id][0][3][0] - corners[id][0][0][0]) / arucoHeight_mm)
+                                y_scale.append((corners[id][0][2][0] - corners[id][0][1][0]) / arucoHeight_mm)
+
+                    for i, corner_set in enumerate(corners):
+                        pts = corner_set[0]
                         center_x = np.mean(pts[:, 1])
                         center_y = np.mean(pts[:, 0])
-                        centers[ids[i][0]] = [center_x, center_y]
-
-                    scale = [sum(x_scale)/len(x_scale), sum(y_scale)/len(y_scale)] 
-                    self.distance_Y = (centers[0][1] - centers[1][1]) * (1 / scale[1])
+                        if ids[i][0] == 0:
+                                centers[ids[i][0]] = [center_x, center_y]
+                    try:
+                        scale = [sum(x_scale) / len(x_scale), sum(y_scale) / len(y_scale)]
+                        self.scale_aux = scale
+                    except:
+                        scale = self.scale_aux
+                    self.distance_Y = (centers[0][1] - self.cx) * (1 / scale[1])
+                    #print('Center Aruco [0]:',centers[0])
+                    #print('Center Marker:',(self.cx,self.cy))
+                    #print('Distance Y:',self.distance_Y)
                     self.distance_label.setText(f"{self.distance_Y:.3f}")
 
-        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+        # Mostrar en UI
         h, w, ch = rgb_image.shape
         bytes_per_line = ch * w
-        convert_to_qt_format = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
-        p = convert_to_qt_format.scaled(640, 480, Qt.KeepAspectRatio)
+        qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        qt_pixmap = QPixmap.fromImage(qt_image.scaled(640, 480, Qt.KeepAspectRatio))
+        if self.color_filter_tab_active:
+            if camera_id==1:
+                qt_filtered_image = QImage(filtered_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
+                qt_filtered_pixmap = QPixmap.fromImage(qt_filtered_image.scaled(640, 480, Qt.KeepAspectRatio))
+                self.camera2_label.setPixmap(qt_filtered_pixmap)
 
-        if camera_id == 0:
-            self.camera1_label.setPixmap(QPixmap.fromImage(p))
+        if camera_id == 1:
+            self.camera1_label.setPixmap(qt_pixmap)
             self.lastFrames[0] = image
-        elif camera_id == 1:
-            self.camera2_label.setPixmap(QPixmap.fromImage(p))
-            self.lastFrames[1] = image
+        elif camera_id == 2:
+            if not self.color_filter_tab_active:
+                self.camera2_label.setPixmap(qt_pixmap)
+                self.lastFrames[1] = image
 
     def toggle_aruco_detection(self):
         if not self.aruco_detection:
@@ -612,15 +723,17 @@ class SMACharacterizationApp(QMainWindow):
                 (data.get('force_N', 0) - self.force_offset) * self.force_scale,  # Aplicar calibración
                 data.get('busVoltage_SMA_V', 0),
                 data.get('busVoltage_ref_V', 0),
-                self.distance_Y - self.zero_deformation
+                self.distance_Y - self.zero_deformation,
+                self.distance_Y
             ])
             
         # Capturar frames de las cámaras
-        for i in range(len(self.lastFrames)):
-            frame = self.lastFrames[i]
-            if frame is not None:
-                frame_path = os.path.join(self.data_folder, f"{self.current_timestamp}",f"cam{i+1}", f"{timestamp}.jpg")
-                cv2.imwrite(frame_path, frame)
+        #for i in range(len(self.lastFrames)):
+        i = 1
+        frame = self.lastFrames[i]
+        if frame is not None:
+            frame_path = os.path.join(self.data_folder, f"{self.current_timestamp}",f"cam{i+1}", f"{timestamp}.jpg")
+            cv2.imwrite(frame_path, frame)
 
     def clear_terminal(self):
         self.terminal.clear()
@@ -652,7 +765,7 @@ class SMACharacterizationApp(QMainWindow):
             csv_path = os.path.join(self.data_folder, f"{self.current_timestamp}","data.csv")
             with open(csv_path, 'w', newline='') as csvfile:
                 writer = csv.writer(csvfile)
-                writer.writerow(['timestamp', 'current_mA', 'force_N', 'busVoltage_SMA_V', 'busVoltage_ref_V','deflexion_mm'])
+                writer.writerow(['timestamp', 'current_mA', 'force_N', 'busVoltage_SMA_V', 'busVoltage_ref_V','deflexion_mm','distancia_raw_mm'])
             
             # Enviar comando de inicio al Arduino
             command = f"START {active_time} {rest_time}\n"
@@ -818,7 +931,49 @@ class SMACharacterizationApp(QMainWindow):
     def create_calibration_directory(self):
         cwd = os.getcwd()
         os.makedirs(os.path.join(cwd,'Calibration'), exist_ok=True)
-            
+
+    def change_filter_mode(self, mode):
+        self.color_filter_mode = mode
+
+        if mode == "RGB":
+            channel_names = ["R", "G", "B"]
+            max_vals = [255, 255, 255]
+            lower = self.rgb_lower
+            upper = self.rgb_upper
+        else:
+            channel_names = ["H", "S", "V"]
+            max_vals = [179, 255, 255]
+            lower = self.hsv_lower
+            upper = self.hsv_upper
+
+        # Actualizar sliders y labels
+        for i in range(3):
+            self.sliders[i].setMaximum(max_vals[i])
+            self.sliders[i + 3].setMaximum(max_vals[i])
+            self.sliders[i].setValue(lower[i])
+            self.sliders[i + 3].setValue(upper[i])
+
+            self.slider_labels[i].setText(f"{channel_names[i]} Min")
+            self.slider_labels[i + 3].setText(f"{channel_names[i]} Max")
+
+
+    def update_color_ranges(self):
+        if self.color_filter_mode == "RGB":
+            self.rgb_lower = [s.value() for s in self.sliders[:3]]
+            self.rgb_upper = [s.value() for s in self.sliders[3:]]
+        else:
+            self.hsv_lower = [s.value() for s in self.sliders[:3]]
+            self.hsv_upper = [s.value() for s in self.sliders[3:]]
+
+    def apply_color_filter(self, image):
+        if self.color_filter_mode == "RGB":
+            mask = cv2.inRange(image, np.array(self.rgb_lower), np.array(self.rgb_upper))
+        else:
+            hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+            mask = cv2.inRange(hsv, np.array(self.hsv_lower), np.array(self.hsv_upper))
+        return mask
+
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle('Fusion')  # Estilo más moderno
